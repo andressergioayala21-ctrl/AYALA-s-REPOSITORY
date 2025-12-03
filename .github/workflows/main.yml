@@ -1,0 +1,68 @@
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18.x]
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests and produce JUnit + coverage
+        id: run-tests
+        # Se asume que tienes jest; si usas otro runner, adapta el comando
+        run: |
+          # asegurarse de tener jest-junit si se genera JUnit
+          npm install --no-save jest-junit || true
+          # Ejecutar tests produciendo reporte JUnit y coverage
+          npx jest --ci --reporters=default --reporters=jest-junit --coverage
+        continue-on-error: true
+
+      - name: Upload test reports (JUnit + coverage)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            junit.xml
+            coverage
+            coverage/**
+
+      - name: Verificar resultado del pipeline y comentar en PR
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const status = (core.getInput && core.getInput('GITHUB_ACTIONS')) ? '' : '';
+            const conclusion = `${{ job.status }}`; // fallback
+            // usamos la salida de la step de tests
+            const testOutcome = '${{ steps.run-tests.outcome }}';
+            const testConclusion = '${{ steps.run-tests.conclusion }}';
+            const summary = `CI result for commit: \n- job.status: ${{ job.status }}\n- tests.outcome: ${testOutcome}\n- tests.conclusion: ${testConclusion}\n\nArtifacts: test-reports (JUnit + coverage)`;
+            // Post a PR comment when this is a pull_request
+            if (github.context.payload.pull_request) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: summary
+              });
+            } else {
+              core.info(summary);
+            }
